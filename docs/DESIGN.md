@@ -11,12 +11,12 @@ surfaces. Decisions and their rejected alternatives live in `docs/adr/`.
    snapshot sink behind a seam and never carries domain logic.
 2. **DOD**: flat typed collections, index references (`NodeIdx`),
    behavior as functions outside the data, no object graphs.
-3. **Policy-separated flushing**: *when* to persist is a `FlushPolicy`
+3. **Policy-separated consolidating**: *when* to persist is a `ConsolidationPolicy`
    decision evaluated on events — never welded into domain operations.
 4. **Single writer**: exactly one process owns memory at a time,
    enforced by an advisory lock.
 5. **Small graphs**: one graph per idea cluster, ~30 nodes practice;
-   whole-graph load/flush is deliberately trivial at this size.
+   whole-graph load/consolidate is deliberately trivial at this size.
 
 ## Layout
 
@@ -24,8 +24,8 @@ surfaces. Decisions and their rejected alternatives live in `docs/adr/`.
 src/
   types.rs      plain data, serde, zero behavior
   graph.rs      NeuronGraph: the domain core (no I/O)
-  policy.rs     FlushPolicy: pure decisions (no side effects)
-  flusher.rs    SQLite snapshot sink + cold reads (all SQL lives here)
+  policy.rs     ConsolidationPolicy: pure decisions (no side effects)
+  engram.rs    SQLite snapshot sink + cold reads (all SQL lives here)
   cortex.rs     owner runtime: cache + policy execution + lock
   render.rs     mermaid / markdown / JSON interchange
   main.rs       CLI adapter (thin)
@@ -57,11 +57,11 @@ pub struct Node      { id, kind, title, content, status, stage,
 pub struct Edge      { from, to, label, weight: u32, created: i64 }
 
 pub struct GraphData { meta, nodes: Vec<Node>, edges: Vec<Edge> }
-// GraphData is the serialization view: flusher rows and JSON
+// GraphData is the serialization view: consolidateer rows and JSON
 // interchange both round-trip through it.
 ```
 
-Read views (assembled by graph/flusher, rendered by adapters):
+Read views (assembled by graph/consolidateer, rendered by adapters):
 
 ```rust
 pub struct NodeBrief    { id, kind, title, reinforced }
@@ -82,21 +82,21 @@ pub struct NeuronGraph {
     edges: Vec<Edge>,
     topo:  StableDiGraph<NodeIdx, ()>,     // petgraph 0.8.3, topology only
     ids:   HashMap<String, NodeIdx>,       // id -> index
-    outbox: Outbox,                        // parallel mutation journal
+    trace: TraceJournal,                        // parallel mutation journal
     last_touch: i64,                       // for quiet-period policy
 }
 
-// The outbox: every mutation applies to state AND records its row in
+// The trace journal: every mutation applies to state AND records its row in
 // the journal for its component kind. Keyed maps = last-wins dedup.
-struct Outbox {
+struct TraceJournal {
     meta:  bool,                              // graphs row dirty
     nodes: HashMap<String, ()>,               // node ids touched
     edges: HashMap<(String, String, String), ()>,  // edge keys touched
     ops:   u32,                               // total mutations (policy)
 }
 
-// Drained at flush into the Flusher's input — per-kind row batches:
-pub struct GraphDelta {
+// Drained at consolidate into the EngramStore's input — per-kind row batches:
+pub struct Trace {
     pub meta:  Option<GraphMeta>,
     pub nodes: Vec<Node>,                  // current rows for touched ids
     pub edges: Vec<Edge>,
@@ -109,9 +109,9 @@ Invariants (hold after every public call):
 - `ids` maps exactly the node ids present in `nodes`.
 - `topo` node/edge sets mirror `nodes`/`edges` (edge weight lives in
   the flat vec; topo carries connectivity only).
-- Every mutation records into the outbox and stamps `last_touch` and
-  `meta.updated`; a successful flush drains the outbox via `take_delta` (cortex-driven
-  after a successful flush).
+- Every mutation records into the trace journal and stamps `last_touch` and
+  `meta.updated`; a successful consolidate drains the trace journal via `take_trace` (cortex-driven
+  after a successful consolidate).
 
 Interface:
 
@@ -135,7 +135,7 @@ summary(&self, limit) -> Summary            // frontier = newest active,
 neighborhood(&self, id, depth) -> Result<Neighborhood>  // BFS both
                                             // directions via topo
 path(&self, from, to) -> Option<Vec<String>>  // shortest, via topo
-take_delta(&mut self) -> GraphDelta   // drain outbox; rows copied from
+take_trace(&mut self) -> Trace   // drain trace journal; rows copied from
                                       // current state (state is truth)
 dirty(&self) -> u32,  touched(&self) -> i64
 ```
@@ -147,8 +147,8 @@ clock (determinism, testability). All errors are "does not exist" /
 ## policy.rs — pure decisions
 
 ```rust
-pub enum FlushEvent {
-    OnDemand,             // explicit flush verb / MCP tool
+pub enum Stimulus {
+    OnDemand,             // explicit consolidate verb / MCP tool
     Lifecycle,            // settle | reopen | supersede just applied
     Mutated,              // any other mutation applied
     Tick,                 // sweeper interval fired
@@ -157,50 +157,50 @@ pub enum FlushEvent {
     MemoryPressure,       // cortex over max_loaded
 }
 
-pub struct FlushPolicy {
+pub struct ConsolidationPolicy {
     dirty_threshold: u32,   // default 10
     quiet_secs: i64,        // default 60
     max_loaded: usize,      // default 8
 }
 
-pub enum Decision { Nothing, Flush, FlushAndEvict }
+pub enum Response { Ignore, Consolidate, ConsolidateAndRelease }
 
 pub fn evaluate(policy, event, dirty: u32, idle_secs: i64,
-                loaded: usize) -> Decision
+                loaded: usize) -> Response
 ```
 
 Decision table (row = event):
 
 | event          | condition                    | decision       |
 |----------------|------------------------------|----------------|
-| OnDemand       | always                       | Flush          |
-| Lifecycle      | always (hardwired)           | Flush          |
-| Mutated        | dirty >= dirty_threshold     | Flush          |
-| Tick           | dirty > 0 && idle >= quiet   | Flush          |
-| FocusSwitch    | dirty > 0                    | Flush          |
-| Shutdown       | dirty > 0 (hardwired)        | Flush          |
-| MemoryPressure | loaded > max_loaded          | FlushAndEvict  |
+| OnDemand       | always                       | Consolidate    |
+| Lifecycle      | always (hardwired)           | Consolidate    |
+| Mutated        | dirty >= dirty_threshold     | Consolidate    |
+| Tick           | dirty > 0 && idle >= quiet   | Consolidate    |
+| FocusSwitch    | dirty > 0                    | Consolidate    |
+| Shutdown       | dirty > 0 (hardwired)        | Consolidate    |
+| MemoryPressure | loaded > max_loaded          | ConsolidateAndRelease  |
 
 Loss window = min(dirty_threshold ops, quiet_secs, next lifecycle).
 
-## flusher.rs — snapshot sink and cold reads
+## engram.rs — snapshot sink and cold reads
 
 All SQL in the crate lives here. No domain logic: rows in, rows out.
 
 ```rust
-pub struct Flusher { conn: Connection }
+pub struct EngramStore { conn: Connection }
 
-open(path) -> Result<Flusher>     // WAL, busy_timeout=5000, FK on,
+open(path) -> Result<EngramStore>     // WAL, busy_timeout=5000, FK on,
                                   // hand-rolled user_version migration;
                                   // refuses schemas newer than binary
-load(&mut self, id) -> Result<GraphData>
-flush(&mut self, graph_id, &GraphDelta) -> Result<()>
+recall(&mut self, id) -> Result<GraphData>
+consolidate(&mut self, graph_id, &Trace) -> Result<()>
     // ONE IMMEDIATE txn, per-kind bulk statements over the delta only:
     //   upsert graphs row        if delta.meta
     //   bulk upsert delta.nodes  (prepared stmt loop; FTS triggers fire
     //   bulk upsert delta.edges   only for rows actually written)
     //   bulk delete deleted_*    (empty in MVP; the slot exists)
-    // O(changed rows), stable nids, no whole-graph rewrite. The Flusher
+    // O(changed rows), stable nids, no whole-graph rewrite. The EngramStore
     // knows nothing about graphs — it moves a delta's rows.
 import(&mut self, &GraphData) -> Result<()>
     // the ONE whole-graph write: bulk insert of a graph whose id does
@@ -211,9 +211,9 @@ search(&mut self, q, limit) -> Result<Vec<Hit>>  // FTS5 MATCH, rank
 exists(&mut self, id) -> Result<bool>
 ```
 
-Staleness contract: `list`/`search` see *flushed* state only; bounded
+Staleness contract: `list`/`search` see *consolidated* state only; bounded
 by the policy's loss window. Callers surface this as "as of last
-flush" semantics; MCP search of the focused hot graph merges in-memory
+consolidate" semantics; MCP search of the focused hot graph merges in-memory
 matches for that graph only (cheap linear scan at ~30 nodes).
 
 Schema: v1 DDL exactly as researched — graphs; nodes with INTEGER
@@ -227,8 +227,8 @@ with insert/update/delete sync triggers. Four indexes total.
 ```rust
 pub struct Cortex {
     graphs: HashMap<String, NeuronGraph>,
-    flusher: Flusher,
-    policy: FlushPolicy,
+    consolidateer: EngramStore,
+    policy: ConsolidationPolicy,
     focus: Option<String>,
     lock: CortexLock,          // advisory file lock
 }
@@ -238,13 +238,13 @@ open(db_path, policy) -> Result<Cortex>   // acquires cortex.lock (flock);
 with_graph<T>(&mut self, id, now,
               op: impl FnOnce(&mut NeuronGraph) -> Result<T>) -> Result<T>
     // 1. focus != id  -> emit FocusSwitch for previous focus
-    // 2. load-if-absent (from flusher); MemoryPressure eviction first
+    // 2. load-if-absent (from consolidateer); MemoryPressure eviction first
     // 3. run op; classify event (Lifecycle vs Mutated) by verb
-    // 4. evaluate policy; execute Flush / FlushAndEvict; mark_clean
+    // 4. evaluate policy; execute Consolidate / ConsolidateAndRelease
 read_graph<T>(&mut self, id, ...)          // same, no dirty event
 tick(&mut self, now)                       // sweeper: Tick per dirty graph
-flush_all(&mut self, now)                  // Shutdown path
-create_graph / list / search               // delegate to flusher (+ hot
+consolidate_all(&mut self, now)                  // Shutdown path
+create_graph / list / search               // delegate to consolidateer (+ hot
                                            // merge for focused graph)
 ```
 
@@ -254,7 +254,7 @@ CLI write verbs try the same lock non-blocking: failure means an owner
 is alive -> refuse with "owner running; use the MCP tools".
 
 Sweeper: the MCP adapter runs `tick` every 15s (tokio interval). The
-CLI direct mode never needs it (flush-on-exit).
+CLI direct mode never needs it (consolidate-on-exit).
 
 ## Adapters
 
@@ -273,17 +273,17 @@ neuron-mcp (the owner, long-lived, single writer while alive):
 | supersede | graph, old, by             | cortex.with_graph (Lifecycle) |
 | stage     | graph, id, stage           | cortex.with_graph        |
 | settle    | graph  (also reopen)       | cortex.with_graph (Lifecycle) |
-| flush     | graph?                     | OnDemand -> cortex       |
+| consolidate     | graph?                     | OnDemand -> cortex       |
 
 Budget: every read tool truncates by importance (weight desc,
 reinforced desc) to the requested budget; defaults keep summary ~150
 tokens.
 
 neuron CLI:
-- Always available (reads flushed snapshots): `list`, `mermaid`,
+- Always available (reads consolidated snapshots): `list`, `mermaid`,
   `export`, `import`, `new`.
 - Direct mode (only when no owner lock): full write verbs through the
-  same Cortex with `FlushPolicy::immediate()` (flush-on-exit
+  same Cortex with `ConsolidationPolicy::immediate()` (consolidate-on-exit
   degenerate policy). Same code path, different policy — the mode
   difference IS a policy value.
 
@@ -295,7 +295,7 @@ neuron CLI:
   are safe; writes are single-writer by construction above the DB.
 - Crash of the owner loses at most the policy loss window (<=10 ops or
   <=60s idle work or up-to-lifecycle). Fsync durability inherits WAL
-  defaults; flush transactions are IMMEDIATE.
+  defaults; consolidate transactions are IMMEDIATE.
 
 ## Test plan
 
@@ -305,10 +305,10 @@ neuron CLI:
 |         |                     | link weight, supersede survival, BFS    |
 |         |                     | depth, path, summary shape, invariants  |
 | policy  | pure fn             | full decision table as data             |
-| flusher | tempdir DB          | load/flush lossless roundtrip; FTS sync |
+| consolidateer | tempdir DB          | load/consolidate lossless roundtrip; FTS sync |
 |         |                     | through whole-graph replace; refusal of |
 |         |                     | newer schema                            |
-| cortex  | tempdir + fake now  | op streams produce the expected flush   |
+| cortex  | tempdir + fake now  | op streams produce the expected consolidate   |
 |         |                     | calls; eviction order; lock exclusion   |
 | render  | golden files        | deterministic mermaid; JSON roundtrip   |
 | bins    | none (thin)         | logic lives below the seam              |
