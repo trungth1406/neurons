@@ -1,0 +1,14 @@
+[package]
+name = "neuron"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+# serde-1 is owner-pinned (spec #1); rejected for persistence per ADR-0001
+petgraph = { version = "0.8.3", features = ["stable_graph", "serde-1"] }
+serde = { version = "1.0.229", features = ["derive"] }
+
+[[bin]]
+name = "neuron"
+path = "src/main.rs"
