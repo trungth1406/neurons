@@ -26,7 +26,7 @@ src/
   graph.rs      NeuronGraph: the domain core (no I/O)
   policy.rs     FlushPolicy: pure decisions (no side effects)
   flusher.rs    SQLite snapshot sink + cold reads (all SQL lives here)
-  holder.rs     owner runtime: cache + policy execution + lock
+  cortex.rs     owner runtime: cache + policy execution + lock
   render.rs     mermaid / markdown / JSON interchange
   main.rs       CLI adapter (thin)
   bin/mcp.rs    MCP owner adapter (thin)
@@ -82,8 +82,26 @@ pub struct NeuronGraph {
     edges: Vec<Edge>,
     topo:  StableDiGraph<NodeIdx, ()>,     // petgraph 0.8.3, topology only
     ids:   HashMap<String, NodeIdx>,       // id -> index
-    dirty_ops: u32,                        // mutations since last flush
+    outbox: Outbox,                        // parallel mutation journal
     last_touch: i64,                       // for quiet-period policy
+}
+
+// The outbox: every mutation applies to state AND records its row in
+// the journal for its component kind. Keyed maps = last-wins dedup.
+struct Outbox {
+    meta:  bool,                              // graphs row dirty
+    nodes: HashMap<String, ()>,               // node ids touched
+    edges: HashMap<(String, String, String), ()>,  // edge keys touched
+    ops:   u32,                               // total mutations (policy)
+}
+
+// Drained at flush into the Flusher's input — per-kind row batches:
+pub struct GraphDelta {
+    pub meta:  Option<GraphMeta>,
+    pub nodes: Vec<Node>,                  // current rows for touched ids
+    pub edges: Vec<Edge>,
+    pub deleted_nodes: Vec<String>,        // empty in MVP: domain never
+    pub deleted_edges: Vec<(String, String, String)>,  // deletes
 }
 ```
 
@@ -91,8 +109,8 @@ Invariants (hold after every public call):
 - `ids` maps exactly the node ids present in `nodes`.
 - `topo` node/edge sets mirror `nodes`/`edges` (edge weight lives in
   the flat vec; topo carries connectivity only).
-- Every mutation increments `dirty_ops` and stamps `last_touch` and
-  `meta.updated`; `mark_clean()` zeroes `dirty_ops` (called by holder
+- Every mutation records into the outbox and stamps `last_touch` and
+  `meta.updated`; a successful flush drains the outbox via `take_delta` (cortex-driven
   after a successful flush).
 
 Interface:
@@ -117,6 +135,8 @@ summary(&self, limit) -> Summary            // frontier = newest active,
 neighborhood(&self, id, depth) -> Result<Neighborhood>  // BFS both
                                             // directions via topo
 path(&self, from, to) -> Option<Vec<String>>  // shortest, via topo
+take_delta(&mut self) -> GraphDelta   // drain outbox; rows copied from
+                                      // current state (state is truth)
 dirty(&self) -> u32,  touched(&self) -> i64
 ```
 
@@ -132,9 +152,9 @@ pub enum FlushEvent {
     Lifecycle,            // settle | reopen | supersede just applied
     Mutated,              // any other mutation applied
     Tick,                 // sweeper interval fired
-    FocusSwitch,          // holder touched a different graph
+    FocusSwitch,          // cortex touched a different graph
     Shutdown,             // owner terminating
-    MemoryPressure,       // holder over max_loaded
+    MemoryPressure,       // cortex over max_loaded
 }
 
 pub struct FlushPolicy {
@@ -174,10 +194,17 @@ open(path) -> Result<Flusher>     // WAL, busy_timeout=5000, FK on,
                                   // hand-rolled user_version migration;
                                   // refuses schemas newer than binary
 load(&mut self, id) -> Result<GraphData>
-flush(&mut self, &GraphData) -> Result<()>
-    // ONE IMMEDIATE txn: upsert graphs row; DELETE graph's nodes+edges;
-    // reinsert all rows. Whole-graph replace — trivial at ~30 nodes,
-    // and FTS triggers keep the index in sync through the delete/insert.
+flush(&mut self, graph_id, &GraphDelta) -> Result<()>
+    // ONE IMMEDIATE txn, per-kind bulk statements over the delta only:
+    //   upsert graphs row        if delta.meta
+    //   bulk upsert delta.nodes  (prepared stmt loop; FTS triggers fire
+    //   bulk upsert delta.edges   only for rows actually written)
+    //   bulk delete deleted_*    (empty in MVP; the slot exists)
+    // O(changed rows), stable nids, no whole-graph rewrite. The Flusher
+    // knows nothing about graphs — it moves a delta's rows.
+import(&mut self, &GraphData) -> Result<()>
+    // the ONE whole-graph write: bulk insert of a graph whose id does
+    // not exist yet (import refuses existing ids — no replace path)
 create(&mut self, &GraphMeta) -> Result<()>     // new graph row
 list(&mut self, status?, project?) -> Result<Vec<GraphMeta>>
 search(&mut self, q, limit) -> Result<Vec<Hit>>  // FTS5 MATCH, rank
@@ -195,18 +222,18 @@ column; edges WITHOUT ROWID with PK(graph_id, from_id, to_id, label) +
 `edges_in` index; FTS5 external-content over nodes(title, content)
 with insert/update/delete sync triggers. Four indexes total.
 
-## holder.rs — the owner runtime
+## cortex.rs — the owner runtime
 
 ```rust
-pub struct Holder {
+pub struct Cortex {
     graphs: HashMap<String, NeuronGraph>,
     flusher: Flusher,
     policy: FlushPolicy,
     focus: Option<String>,
-    lock: HolderLock,          // advisory file lock
+    lock: CortexLock,          // advisory file lock
 }
 
-open(db_path, policy) -> Result<Holder>   // acquires holder.lock (flock);
+open(db_path, policy) -> Result<Cortex>   // acquires cortex.lock (flock);
                                           // Err if another owner is alive
 with_graph<T>(&mut self, id, now,
               op: impl FnOnce(&mut NeuronGraph) -> Result<T>) -> Result<T>
@@ -221,8 +248,8 @@ create_graph / list / search               // delegate to flusher (+ hot
                                            // merge for focused graph)
 ```
 
-Lock protocol: `~/.claude/neurons/holder.lock`, `flock(LOCK_EX|NB)` held
-for the owner's lifetime (kernel releases on death — no stale locks).
+Lock protocol: `~/.claude/neurons/cortex.lock`, `flock(LOCK_EX|NB)` held
+for the cortex process lifetime (kernel releases on death — no stale locks).
 CLI write verbs try the same lock non-blocking: failure means an owner
 is alive -> refuse with "owner running; use the MCP tools".
 
@@ -235,18 +262,18 @@ neuron-mcp (the owner, long-lived, single writer while alive):
 
 | tool      | params                     | maps to                  |
 |-----------|----------------------------|--------------------------|
-| summary   | graph                      | holder.read summary      |
-| show      | graph, node, depth, budget | holder.read neighborhood |
-| search    | query, limit               | holder.search            |
-| path      | graph, from, to            | holder.read path         |
-| list      | status?, project?          | holder.list              |
-| add       | graph, node fields         | holder.with_graph add    |
-| link      | graph, from, to, label     | holder.with_graph link   |
-| reinforce | graph, id                  | holder.with_graph        |
-| supersede | graph, old, by             | holder.with_graph (Lifecycle) |
-| stage     | graph, id, stage           | holder.with_graph        |
-| settle    | graph  (also reopen)       | holder.with_graph (Lifecycle) |
-| flush     | graph?                     | OnDemand -> holder       |
+| summary   | graph                      | cortex.read summary      |
+| show      | graph, node, depth, budget | cortex.read neighborhood |
+| search    | query, limit               | cortex.search            |
+| path      | graph, from, to            | cortex.read path         |
+| list      | status?, project?          | cortex.list              |
+| add       | graph, node fields         | cortex.with_graph add    |
+| link      | graph, from, to, label     | cortex.with_graph link   |
+| reinforce | graph, id                  | cortex.with_graph        |
+| supersede | graph, old, by             | cortex.with_graph (Lifecycle) |
+| stage     | graph, id, stage           | cortex.with_graph        |
+| settle    | graph  (also reopen)       | cortex.with_graph (Lifecycle) |
+| flush     | graph?                     | OnDemand -> cortex       |
 
 Budget: every read tool truncates by importance (weight desc,
 reinforced desc) to the requested budget; defaults keep summary ~150
@@ -256,7 +283,7 @@ neuron CLI:
 - Always available (reads flushed snapshots): `list`, `mermaid`,
   `export`, `import`, `new`.
 - Direct mode (only when no owner lock): full write verbs through the
-  same Holder with `FlushPolicy::immediate()` (flush-on-exit
+  same Cortex with `FlushPolicy::immediate()` (flush-on-exit
   degenerate policy). Same code path, different policy — the mode
   difference IS a policy value.
 
@@ -281,7 +308,7 @@ neuron CLI:
 | flusher | tempdir DB          | load/flush lossless roundtrip; FTS sync |
 |         |                     | through whole-graph replace; refusal of |
 |         |                     | newer schema                            |
-| holder  | tempdir + fake now  | op streams produce the expected flush   |
+| cortex  | tempdir + fake now  | op streams produce the expected flush   |
 |         |                     | calls; eviction order; lock exclusion   |
 | render  | golden files        | deterministic mermaid; JSON roundtrip   |
 | bins    | none (thin)         | logic lives below the seam              |
