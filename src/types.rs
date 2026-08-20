@@ -92,6 +92,14 @@ impl Trace {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hit {
+    pub graph_id: String,
+    pub node_id: String,
+    pub title: String,
+    pub rank: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeBrief {
     pub id: String,
     pub kind: String,

@@ -210,3 +210,14 @@ fn touch_stamps_last_touch_and_meta() {
     assert_eq!(g.touched(), 500);
     assert_eq!(g.meta().updated, 500);
 }
+
+#[test]
+fn trace_rows_follow_insertion_order() {
+    let mut g = seeded();
+    g.reinforce("c", 200).unwrap();
+    g.reinforce("a", 210).unwrap();
+    g.reinforce("b", 220).unwrap();
+    let t = g.take_trace();
+    let order: Vec<&str> = t.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(order, ["a", "b", "c"], "deterministic: insertion order, not touch order");
+}
