@@ -9,6 +9,39 @@ use crate::types::{
     NodeIdx, NodeStatus, StatusCounts, Summary, Trace,
 };
 
+/// The closed set of domain verbs (ADR-0006). One variant per verb;
+/// serde is the wire format for MCP dispatch and future replay.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Op {
+    AddNode(NewNode),
+    Link { from: String, to: String, label: String },
+    Reinforce { id: String },
+    Supersede { old: String, by: String },
+    SetStage { id: String, stage: String },
+    Settle,
+    Reopen,
+}
+
+/// What the consolidation policy hears when an op lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    /// settle / reopen / supersede — hardwired immediate consolidation.
+    Lifecycle,
+    /// everything else — consolidates by threshold.
+    Mutation,
+}
+
+impl Op {
+    pub fn kind(&self) -> OpKind {
+        match self {
+            Op::Supersede { .. } | Op::Settle | Op::Reopen => OpKind::Lifecycle,
+            Op::AddNode(_) | Op::Link { .. } | Op::Reinforce { .. }
+            | Op::SetStage { .. } => OpKind::Mutation,
+        }
+    }
+}
+
 /// Outbox: what changed since the last consolidation, awaiting send.
 /// Keyed maps give last-wins dedup; values index the flat vecs.
 #[derive(Debug, Default)]
@@ -87,6 +120,26 @@ impl NeuronGraph {
 
     pub fn edges(&self) -> &[Edge] {
         &self.edges
+    }
+
+    /// The uniform door: every verb enters here (ADR-0006). Named
+    /// methods below remain the ergonomic API and are what this routes to.
+    pub fn apply(&mut self, op: Op, now: i64) -> Result<()> {
+        match op {
+            Op::AddNode(new) => self.add_node(new, now),
+            Op::Link { from, to, label } => self.link(&from, &to, &label, now),
+            Op::Reinforce { id } => self.reinforce(&id, now),
+            Op::Supersede { old, by } => self.supersede(&old, &by, now),
+            Op::SetStage { id, stage } => self.set_stage(&id, &stage, now),
+            Op::Settle => {
+                self.settle(now);
+                Ok(())
+            }
+            Op::Reopen => {
+                self.reopen(now);
+                Ok(())
+            }
+        }
     }
 
     pub fn add_node(&mut self, new: NewNode, now: i64) -> Result<()> {
