@@ -8,6 +8,7 @@ anyhow = "1.0.104"
 # serde-1 is owner-pinned (spec #1); rejected for persistence per ADR-0001
 petgraph = { version = "0.8.3", features = ["stable_graph", "serde-1"] }
 refinery = { version = "0.9.2", features = ["rusqlite"] }
+# 0.39 cap comes from refinery 0.9 (ADR-0005)
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
