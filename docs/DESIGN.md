@@ -86,9 +86,9 @@ pub struct NeuronGraph {
     last_touch: i64,                       // for quiet-period policy
 }
 
-// The trace journal: every mutation applies to state AND records its row in
+// The outbox: every mutation applies to state AND records its row in
 // the journal for its component kind. Keyed maps = last-wins dedup.
-struct TraceJournal {
+struct Outbox {
     meta:  bool,                              // graphs row dirty
     nodes: HashMap<String, ()>,               // node ids touched
     edges: HashMap<(String, String, String), ()>,  // edge keys touched
@@ -109,8 +109,8 @@ Invariants (hold after every public call):
 - `ids` maps exactly the node ids present in `nodes`.
 - `topo` node/edge sets mirror `nodes`/`edges` (edge weight lives in
   the flat vec; topo carries connectivity only).
-- Every mutation records into the trace journal and stamps `last_touch` and
-  `meta.updated`; a successful consolidate drains the trace journal via `take_trace` (cortex-driven
+- Every mutation records into the outbox and stamps `last_touch` and
+  `meta.updated`; a successful consolidate drains the outbox via `take_trace` (cortex-driven
   after a successful consolidate).
 
 Interface:
@@ -135,7 +135,7 @@ summary(&self, limit) -> Summary            // frontier = newest active,
 neighborhood(&self, id, depth) -> Result<Neighborhood>  // BFS both
                                             // directions via topo
 path(&self, from, to) -> Option<Vec<String>>  // shortest, via topo
-take_trace(&mut self) -> Trace   // drain trace journal; rows copied from
+take_trace(&mut self) -> Trace   // drain outbox; rows copied from
                                       // current state (state is truth)
 dirty(&self) -> u32,  touched(&self) -> i64
 ```
