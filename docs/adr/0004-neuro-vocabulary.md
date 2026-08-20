@@ -15,8 +15,8 @@ precise neuroscience terms for what each piece actually does:
 | Decision         | Response              | stimulus -> response          |
 | Flush            | Consolidate           | memory consolidation          |
 | FlushAndEvict    | ConsolidateAndRelease | consolidate, then release     |
-| outbox           | trace (TraceJournal)  | a memory trace awaiting store |
-| GraphDelta       | Trace                 | the drained trace             |
+| outbox           | Outbox (kept)         | the struct keeps its plain name |
+| GraphDelta       | Trace                 | the drained outbox            |
 | take_delta       | take_trace            |                               |
 | Flusher          | EngramStore           | an engram: the stored memory  |
 | flush(id, delta) | consolidate(id, &Trace) |                             |
@@ -27,3 +27,7 @@ ConsolidationPolicy answers with a Response; Consolidate drains the
 graph's Trace into the EngramStore; recall brings an engram back.
 
 EngramStore chosen over Hippocampus: more precise, easier to type.
+
+Amendment (2026-08-20, owner): the in-graph journal struct stays named
+Outbox — the plainest name for what it is. The drained result remains
+Trace; consolidate/recall/EngramStore vocabulary unchanged.
