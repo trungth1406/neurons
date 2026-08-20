@@ -9,10 +9,10 @@ use crate::types::{
     NodeIdx, NodeStatus, StatusCounts, Summary, Trace,
 };
 
-/// Journal of what changed since the last consolidation.
+/// Outbox: what changed since the last consolidation, awaiting send.
 /// Keyed maps give last-wins dedup; values index the flat vecs.
 #[derive(Debug, Default)]
-struct TraceJournal {
+struct Outbox {
     meta: bool,
     nodes: HashMap<String, NodeIdx>,
     edges: HashMap<EdgeKey, usize>,
@@ -28,7 +28,7 @@ pub struct NeuronGraph {
     edges: Vec<Edge>,
     topo: StableDiGraph<NodeIdx, ()>,
     ids: HashMap<String, NodeIdx>,
-    trace: TraceJournal,
+    outbox: Outbox,
     last_touch: i64,
 }
 
@@ -47,7 +47,7 @@ impl NeuronGraph {
             edges: Vec::new(),
             topo: StableDiGraph::new(),
             ids: HashMap::new(),
-            trace: TraceJournal::default(),
+            outbox: Outbox::default(),
         }
     }
 
@@ -59,7 +59,7 @@ impl NeuronGraph {
         for edge in data.edges {
             graph.insert_edge(edge)?;
         }
-        graph.trace = TraceJournal::default();
+        graph.outbox = Outbox::default();
         Ok(graph)
     }
 
@@ -131,7 +131,7 @@ impl NeuronGraph {
                 self.insert_edge(edge)?
             }
         };
-        self.trace.edges.insert(key, slot);
+        self.outbox.edges.insert(key, slot);
         self.touch(now);
         Ok(())
     }
@@ -239,7 +239,7 @@ impl NeuronGraph {
     }
 
     pub fn take_trace(&mut self) -> Trace {
-        let journal = std::mem::take(&mut self.trace);
+        let journal = std::mem::take(&mut self.outbox);
         let mut node_idxs: Vec<NodeIdx> = journal.nodes.into_values().collect();
         node_idxs.sort_by_key(|idx| idx.0);
         let mut edge_slots: Vec<usize> = journal.edges.into_values().collect();
@@ -260,7 +260,7 @@ impl NeuronGraph {
     }
 
     pub fn dirty(&self) -> u32 {
-        self.trace.ops
+        self.outbox.ops
     }
 
     pub fn touched(&self) -> i64 {
@@ -356,15 +356,15 @@ impl NeuronGraph {
 
     fn journal_node(&mut self, idx: NodeIdx, now: i64) {
         let id = self.nodes[idx.0 as usize].id.clone();
-        self.trace.nodes.insert(id, idx);
+        self.outbox.nodes.insert(id, idx);
         self.touch(now);
     }
 
     fn touch(&mut self, now: i64) {
-        self.trace.ops += 1;
+        self.outbox.ops += 1;
         self.last_touch = now;
         self.meta.updated = now;
-        self.trace.meta = true;
+        self.outbox.meta = true;
     }
 }
 
