@@ -5,70 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::types::{Edge, GraphData, GraphMeta, GraphStatus, Hit, Node, NodeStatus, Trace};
 
-const SCHEMA_V1: &str = "
-CREATE TABLE graphs (
-  id      TEXT PRIMARY KEY,
-  title   TEXT NOT NULL,
-  status  TEXT NOT NULL DEFAULT 'active',
-  project TEXT,
-  created INTEGER NOT NULL,
-  updated INTEGER NOT NULL
-);
-
-CREATE TABLE nodes (
-  nid      INTEGER PRIMARY KEY,
-  graph_id TEXT NOT NULL REFERENCES graphs(id),
-  id       TEXT NOT NULL,
-  kind     TEXT NOT NULL,
-  title    TEXT NOT NULL,
-  content  TEXT NOT NULL DEFAULT '',
-  content_encoding TEXT NOT NULL DEFAULT 'plain',
-  status   INTEGER NOT NULL DEFAULT 0,
-  stage    TEXT,
-  skills   TEXT NOT NULL DEFAULT '[]',
-  reinforced INTEGER NOT NULL DEFAULT 1,
-  superseded_by TEXT,
-  created  INTEGER NOT NULL,
-  updated  INTEGER NOT NULL,
-  UNIQUE (graph_id, id)
-);
-
-CREATE TABLE edges (
-  graph_id TEXT NOT NULL,
-  from_id  TEXT NOT NULL,
-  to_id    TEXT NOT NULL,
-  label    TEXT NOT NULL,
-  weight   INTEGER NOT NULL DEFAULT 1,
-  created  INTEGER NOT NULL,
-  PRIMARY KEY (graph_id, from_id, to_id, label)
-) WITHOUT ROWID;
-
-CREATE INDEX edges_in ON edges (graph_id, to_id);
-
-CREATE VIRTUAL TABLE node_fts USING fts5(
-  title, content,
-  content='nodes', content_rowid='nid'
-);
-
-CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
-  INSERT INTO node_fts(rowid, title, content)
-  VALUES (new.nid, new.title, new.content);
-END;
-
-CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
-  INSERT INTO node_fts(node_fts, rowid, title, content)
-  VALUES ('delete', old.nid, old.title, old.content);
-END;
-
-CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
-  INSERT INTO node_fts(node_fts, rowid, title, content)
-  VALUES ('delete', old.nid, old.title, old.content);
-  INSERT INTO node_fts(rowid, title, content)
-  VALUES (new.nid, new.title, new.content);
-END;
-";
-
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+refinery::embed_migrations!("migrations");
 
 /// Long-term storage: consolidates traces in, recalls graphs out.
 /// Rows only — no domain logic lives here.
@@ -88,7 +25,9 @@ impl EngramStore {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&mut conn)?;
+        migrations::runner()
+            .run(&mut conn)
+            .context("running schema migrations (a newer database refuses an older binary)")?;
         Ok(EngramStore { conn })
     }
 
@@ -110,15 +49,7 @@ impl EngramStore {
             return Ok(());
         }
         let tx = self.write_tx()?;
-        if let Some(meta) = &trace.meta {
-            upsert_meta(&tx, meta)?;
-        }
-        for node in &trace.nodes {
-            upsert_node(&tx, graph_id, node)?;
-        }
-        for edge in &trace.edges {
-            upsert_edge(&tx, graph_id, edge)?;
-        }
+        apply_rows(&tx, graph_id, trace.meta.as_ref(), &trace.nodes, &trace.edges)?;
         apply_deletes(&tx, graph_id, trace)?;
         tx.commit()?;
         Ok(())
@@ -142,13 +73,7 @@ impl EngramStore {
         if taken.is_some() {
             bail!("graph {:?} already exists; import never replaces", data.meta.id);
         }
-        upsert_meta(&tx, &data.meta)?;
-        for node in &data.nodes {
-            upsert_node(&tx, &data.meta.id, node)?;
-        }
-        for edge in &data.edges {
-            upsert_edge(&tx, &data.meta.id, edge)?;
-        }
+        apply_rows(&tx, &data.meta.id, Some(&data.meta), &data.nodes, &data.edges)?;
         tx.commit()?;
         Ok(())
     }
@@ -201,26 +126,6 @@ impl EngramStore {
     }
 }
 
-fn migrate(conn: &mut Connection) -> Result<()> {
-    let latest = MIGRATIONS.len() as u32;
-    let on_disk: u32 =
-        conn.query_row("SELECT user_version FROM pragma_user_version", [], |r| r.get(0))?;
-    if on_disk > latest {
-        bail!(
-            "database schema v{on_disk} is newer than this binary supports (v{latest}); \
-             update the neuron binaries"
-        );
-    }
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(on_disk as usize) {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch(sql)
-            .with_context(|| format!("applying schema migration v{}", i + 1))?;
-        tx.pragma_update(None, "user_version", (i + 1) as u32)?;
-        tx.commit()?;
-    }
-    Ok(())
-}
-
 // Storage encodings: the representations the schema fossilizes.
 fn status_str(status: GraphStatus) -> &'static str {
     match status {
@@ -244,6 +149,25 @@ fn node_status_parse(v: u8) -> Result<NodeStatus> {
         2 => Ok(NodeStatus::Parked),
         _ => bail!("unknown node status {v}"),
     }
+}
+
+fn apply_rows(
+    tx: &rusqlite::Transaction,
+    graph_id: &str,
+    meta: Option<&GraphMeta>,
+    nodes: &[Node],
+    edges: &[Edge],
+) -> Result<()> {
+    if let Some(meta) = meta {
+        upsert_meta(tx, meta)?;
+    }
+    for node in nodes {
+        upsert_node(tx, graph_id, node)?;
+    }
+    for edge in edges {
+        upsert_edge(tx, graph_id, edge)?;
+    }
+    Ok(())
 }
 
 fn upsert_meta(tx: &rusqlite::Transaction, meta: &GraphMeta) -> Result<()> {

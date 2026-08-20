@@ -159,10 +159,16 @@ fn newer_schema_is_refused() {
     drop(EngramStore::open(&path).unwrap());
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.pragma_update(None, "user_version", 99).unwrap();
+        conn.execute(
+            "INSERT INTO refinery_schema_history (version, name, applied_on, checksum)
+             VALUES (99, 'from_the_future', '2099-01-01T00:00:00Z', '0')",
+            [],
+        )
+        .unwrap();
     }
     let err = EngramStore::open(&path).unwrap_err();
-    assert!(err.to_string().contains("newer"));
+    let msg = format!("{err:#}").to_lowercase();
+    assert!(msg.contains("missing") || msg.contains("newer"), "got: {msg}");
 }
 
 #[test]
