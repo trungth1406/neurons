@@ -121,7 +121,7 @@ impl EngramStore {
         collect_mapped(rows, "searching nodes")
     }
 
-    fn write_tx(&mut self) -> Result<rusqlite::Transaction> {
+    fn write_tx(&mut self) -> Result<rusqlite::Transaction<'_>> {
         Ok(self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?)
