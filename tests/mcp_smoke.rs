@@ -11,6 +11,16 @@ fn args_of(value: Value) -> Map<String, Value> {
     value.as_object().expect("object args").clone()
 }
 
+fn outcome_of(r: &rmcp::model::CallToolResult) -> Value {
+    match &r.structured_content {
+        Some(v) => v.clone(),
+        None => {
+            let text = r.content.first().and_then(|c| c.as_text()).expect("text block");
+            serde_json::from_str(&text.text).expect("outcome json")
+        }
+    }
+}
+
 #[tokio::test]
 async fn tools_list_and_write_read_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
@@ -31,9 +41,9 @@ async fn tools_list_and_write_read_roundtrip() {
     let tools = client.list_all_tools().await.expect("tools list");
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     for expected in [
-        "summary", "show", "search", "path", "list", "new_graph", "add_node", "link",
-        "reinforce", "supersede", "set_stage", "park", "unpark", "settle", "reopen",
-        "consolidate",
+        "summary", "show", "search", "path", "list", "new_graph", "add_node", "add_nodes",
+        "link", "reinforce", "supersede", "set_stage", "park", "unpark", "settle",
+        "reopen", "consolidate",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}: {names:?}");
     }
@@ -136,6 +146,63 @@ async fn tools_list_and_write_read_roundtrip() {
     ok_text(r, "settle");
     let r = call("reopen", json!({"graph": "smoke"})).await.unwrap();
     ok_text(r, "reopen");
+
+    let r = call(
+        "add_nodes",
+        json!({
+            "graph": "smoke",
+            "nodes": [
+                {"id": "d", "kind": "idea", "title": "Batch root"},
+                {"id": "e", "kind": "idea", "title": "Batch branch"},
+                {"id": "f", "kind": "idea", "title": "Batch leaf"},
+            ],
+            "links": [
+                {"from": "d", "to": "e", "label": "spawns"},
+                {"from": "e", "to": "f", "label": "spawns"},
+            ],
+        }),
+    )
+    .await
+    .unwrap();
+    assert_ne!(r.is_error, Some(true), "add_nodes must succeed");
+    assert!(
+        matches!(&r.structured_content, Some(Value::Object(_)) | None),
+        "add_nodes carries object structuredContent"
+    );
+    let batch = outcome_of(&r);
+    assert_eq!(batch["applied_nodes"], json!(3), "three nodes applied: {batch}");
+    assert_eq!(batch["applied_links"], json!(2), "two links applied: {batch}");
+    assert_eq!(batch["failed"], Value::Null, "clean batch reports no failure: {batch}");
+    let r = call("summary", json!({"graph": "smoke", "limit": 10})).await.unwrap();
+    let after = ok_text(r, "summary after batch");
+    assert!(after.contains("Batch root"), "batch nodes land in the graph: {after}");
+
+    let r = call(
+        "add_nodes",
+        json!({
+            "graph": "smoke",
+            "nodes": [{"id": "g", "kind": "idea", "title": "Partial survivor"}],
+            "links": [
+                {"from": "g", "to": "ghost", "label": "haunts"},
+                {"from": "g", "to": "d", "label": "never applied"},
+            ],
+        }),
+    )
+    .await
+    .unwrap();
+    assert_ne!(r.is_error, Some(true), "partial batch is a report, not a tool error");
+    assert!(
+        matches!(&r.structured_content, Some(Value::Object(_)) | None),
+        "partial add_nodes carries object structuredContent"
+    );
+    let batch = outcome_of(&r);
+    assert_eq!(batch["applied_nodes"], json!(1), "the valid node applied: {batch}");
+    assert_eq!(batch["applied_links"], json!(0), "stopped at the bad edge: {batch}");
+    assert_eq!(batch["failed"]["kind"], json!("link"), "failure names its kind: {batch}");
+    assert_eq!(batch["failed"]["edge"]["to"], json!("ghost"), "failure names the edge: {batch}");
+    let r = call("summary", json!({"graph": "smoke", "limit": 10})).await.unwrap();
+    let after = ok_text(r, "summary after partial batch");
+    assert!(after.contains("Partial survivor"), "the valid prefix landed: {after}");
 
     client.cancel().await.ok();
 }
