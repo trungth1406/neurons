@@ -75,5 +75,59 @@ async fn tools_list_and_write_read_roundtrip() {
         );
     }
 
+    let ok_text = |r: rmcp::model::CallToolResult, tool: &str| {
+        assert_ne!(r.is_error, Some(true), "{tool} must succeed");
+        serde_json::to_string(&r).unwrap()
+    };
+
+    let r = call("reinforce", json!({"graph": "smoke", "id": "a"})).await.unwrap();
+    ok_text(r, "reinforce");
+    let r = call("set_stage", json!({"graph": "smoke", "id": "a", "stage": "grilled"}))
+        .await
+        .unwrap();
+    ok_text(r, "set_stage");
+
+    let r = call("show", json!({"graph": "smoke", "node": "a"})).await.unwrap();
+    let shown = ok_text(r, "show");
+    assert!(shown.contains("Second thought"), "show walks a -> b: {shown}");
+
+    let r = call("path", json!({"graph": "smoke", "from": "a", "to": "b"})).await.unwrap();
+    let p = ok_text(r, "path");
+    assert!(p.contains("\"a\"") && p.contains("\"b\""), "path a->b found: {p}");
+
+    let r = call(
+        "add_node",
+        json!({"graph": "smoke", "id": "c", "kind": "idea", "title": "Replacement thought"}),
+    )
+    .await
+    .unwrap();
+    ok_text(r, "add_node c");
+    let r = call("supersede", json!({"graph": "smoke", "old": "b", "by": "c"})).await.unwrap();
+    ok_text(r, "supersede");
+
+    let r = call("park", json!({"graph": "smoke", "id": "c"})).await.unwrap();
+    ok_text(r, "park");
+    let r = call("unpark", json!({"graph": "smoke", "id": "c"})).await.unwrap();
+    ok_text(r, "unpark");
+
+    let r = call("consolidate", json!({})).await.unwrap();
+    ok_text(r, "consolidate");
+    let r = call("search", json!({"query": "thought"})).await.unwrap();
+    let hits = ok_text(r, "search");
+    assert!(hits.contains("smoke"), "consolidated thoughts findable: {hits}");
+
+    let r = call("list", json!({"status": "active"})).await.unwrap();
+    let listed = ok_text(r, "list");
+    assert!(listed.contains("Smoke test"), "list sees the graph: {listed}");
+    let r = call("list", json!({"status": "bogus"})).await;
+    if let Ok(result) = r {
+        assert_eq!(result.is_error, Some(true), "bogus status filter is a tool error");
+    }
+
+    let r = call("settle", json!({"graph": "smoke"})).await.unwrap();
+    ok_text(r, "settle");
+    let r = call("reopen", json!({"graph": "smoke"})).await.unwrap();
+    ok_text(r, "reopen");
+
     client.cancel().await.ok();
 }
