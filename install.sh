@@ -12,24 +12,26 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 echo "fetching latest release..."
-DOWNLOAD_URL=$(curl -fsSL "$API" | grep -o "https://[^\"]*neuron-mcp[^\"]*$TARGET[^\"]*\.tar\.gz") || {
-  echo "error: cannot find release asset for $TARGET at $API"; exit 1
-}
-TAG=$(echo "$DOWNLOAD_URL" | grep -o 'v[0-9]*\.[0-9]*\.[0-9]*')
+RELEASE_JSON=$(curl -fsSL "$API")
+DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "https://[^\"]*neuron-mcp[^\"]*${TARGET}[^\"]*\.tar\.gz" | head -1 || true)
+if [ -z "$DOWNLOAD_URL" ]; then
+  echo "error: cannot find release asset for $TARGET"; exit 1
+fi
+TAG=$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
 
-CURRENT="v$("$BIN_DIR/neuron-mcp" --version 2>/dev/null | awk '{print $2}')" || CURRENT="none"
-if [ "$CURRENT" = "$TAG" ]; then
-  echo "neuron-mcp already current ($TAG)"
+CURRENT=$("$BIN_DIR/neuron-mcp" --version 2>/dev/null | awk '{print $2}') || CURRENT="none"
+if [ "v$CURRENT" = "$TAG" ]; then
+  echo "neuron-mcp already at $TAG"
 else
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
-  echo "downloading neuron-mcp ${TAG} for ${TARGET}..."
+  echo "downloading neuron-mcp $TAG for $TARGET..."
   curl -fsSL -o "$TMP/neuron-mcp.tar.gz" "$DOWNLOAD_URL"
   tar -xzf "$TMP/neuron-mcp.tar.gz" -C "$TMP"
   mkdir -p "$BIN_DIR"
   mv -f "$TMP/neuron-mcp" "$BIN_DIR/neuron-mcp"
   chmod +x "$BIN_DIR/neuron-mcp"
-  echo "installed neuron-mcp ${TAG} ($CURRENT -> $TAG)"
+  echo "installed neuron-mcp $TAG"
 fi
 
 if command -v claude >/dev/null 2>&1; then
