@@ -66,6 +66,8 @@ impl EngramStore {
 
     /// The one whole-graph write: a graph arriving from interchange.
     pub fn import(&mut self, data: &GraphData) -> Result<()> {
+        // The memory must not adopt what the mind cannot rebuild (#14).
+        crate::graph::check_consistency(data)?;
         let tx = self.write_tx()?;
         let taken: Option<i64> = tx
             .query_row("SELECT 1 FROM graphs WHERE id = ?1", [&data.meta.id], |r| r.get(0))

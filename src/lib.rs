@@ -6,7 +6,7 @@ pub mod types;
 
 pub use cortex::Cortex;
 pub use engram::EngramStore;
-pub use graph::{NeuronGraph, Op, OpKind};
+pub use graph::{check_consistency, NeuronGraph, Op, OpKind};
 pub use policy::{ConsolidationPolicy, Response, Stimulus};
 pub use types::{
     Edge, EdgeKey, GraphData, GraphMeta, GraphStatus, Hit, Neighborhood, NewNode, Node,

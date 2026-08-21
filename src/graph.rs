@@ -71,6 +71,30 @@ fn pg_of(idx: NodeIdx) -> NodeIndex {
     NodeIndex::new(idx.0 as usize)
 }
 
+/// A snapshot is adoptable only if it is self-consistent: node ids
+/// unique, every edge endpoint present. The single authority both the
+/// mind (from_data) and the memory (import) consult — by reference,
+/// building nothing.
+pub fn check_consistency(data: &GraphData) -> Result<()> {
+    let mut ids = HashSet::with_capacity(data.nodes.len());
+    for node in &data.nodes {
+        if !ids.insert(node.id.as_str()) {
+            bail!("snapshot {:?}: node {:?} appears twice", data.meta.id, node.id);
+        }
+    }
+    for edge in &data.edges {
+        for end in [&edge.from, &edge.to] {
+            if !ids.contains(end.as_str()) {
+                bail!(
+                    "snapshot {:?}: edge {:?} -> {:?} references {:?} which is not in the snapshot",
+                    data.meta.id, edge.from, edge.to, end
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 impl NeuronGraph {
     pub fn new(meta: GraphMeta) -> NeuronGraph {
         NeuronGraph {
@@ -85,6 +109,7 @@ impl NeuronGraph {
     }
 
     pub fn from_data(data: GraphData) -> Result<NeuronGraph> {
+        check_consistency(&data)?;
         let mut graph = NeuronGraph::new(data.meta);
         for node in data.nodes {
             graph.insert_node(node)?;
