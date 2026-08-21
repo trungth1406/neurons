@@ -1,8 +1,9 @@
-//! Human-facing views of a graph snapshot: mermaid flowchart and
-//! markdown export. Pure functions over GraphData — zero I/O, zero SQL;
-//! adapters decide where the text goes.
+//! Human-facing views of a graph snapshot: mermaid flowchart,
+//! markdown export, and a self-contained interactive HTML page. Pure
+//! functions over GraphData — zero I/O, zero SQL; adapters decide where
+//! the text goes.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use anyhow::{bail, Result};
 
@@ -153,7 +154,12 @@ fn escape(text: &str) -> String {
 
 /// BFS over the edges in both directions: every node id within `depth`
 /// hops of the focus. Unknown focus is a refusal, not an empty view.
-fn within_radius(data: &GraphData, focus: &str, depth: usize) -> Result<HashSet<String>> {
+///
+/// This is the one authority for radius semantics. Every other view of
+/// depth — including the HTML page's client-side scoping — must derive
+/// from it: [`adjacency`] + [`radius_from_adjacency`] are its embedded
+/// transcription pair, held equivalent by tests/render.rs.
+pub fn within_radius(data: &GraphData, focus: &str, depth: usize) -> Result<HashSet<String>> {
     if !data.nodes.iter().any(|n| n.id == focus) {
         bail!("focus node {focus:?} is not in graph {:?}", data.meta.id);
     }
@@ -177,4 +183,105 @@ fn within_radius(data: &GraphData, focus: &str, depth: usize) -> Result<HashSet<
         }
     }
     Ok(seen)
+}
+
+const PAGE_TEMPLATE: &str = include_str!("assets/page.html");
+/// d3-force standalone bundle; provenance and ISC license live in the
+/// file's own header comment.
+const VENDORED_D3_FORCE: &str = include_str!("../vendor/d3-force.min.js");
+
+/// A complete, self-contained interactive page: the graph as a
+/// free-floating force-directed SVG with in-page focus and depth
+/// controls, a detail card per thought, and status styling parity with
+/// the mermaid view. `focus` and `depth` pick the initial scope;
+/// rescoping happens client-side over the embedded adjacency list,
+/// whose BFS is a transcription of [`radius_from_adjacency`] and is
+/// proven equivalent to [`within_radius`] by the render tests.
+pub fn export_html(data: &GraphData, focus: Option<&str>, depth: usize) -> Result<String> {
+    if let Some(id) = focus {
+        within_radius(data, id, depth)?;
+    }
+    let payload = serde_json::json!({
+        "data": data,
+        "adjacency": adjacency(data),
+        "initial": { "focus": focus, "depth": depth },
+    });
+    // Every `<` becomes \u003c inside the JSON so no free-form text can
+    // smuggle a closing script tag into the payload element.
+    let json = serde_json::to_string(&payload)?.replace('<', "\\u003c");
+    let page = fill(PAGE_TEMPLATE, "@@NEURON:VENDOR@@", VENDORED_D3_FORCE)?;
+    let page = fill(&page, "@@NEURON:TITLE@@", &escape_html(&data.meta.title))?;
+    fill(&page, "@@NEURON:PAYLOAD@@", &json)
+}
+
+/// Splice `value` into the template at its `marker`.
+fn fill(template: &str, marker: &str, value: &str) -> Result<String> {
+    let Some((before, after)) = template.split_once(marker) else {
+        bail!("page template lost its {marker} marker");
+    };
+    Ok(format!("{before}{value}{after}"))
+}
+
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// Undirected neighbor lists in [`within_radius`]'s exact edge-scan
+/// order: for each node every edge is probed `from` side first, and
+/// parallel edges keep their duplicate entries. The HTML page embeds
+/// this list and walks it with a transcription of
+/// [`radius_from_adjacency`].
+pub fn adjacency(data: &GraphData) -> BTreeMap<String, Vec<String>> {
+    data.nodes
+        .iter()
+        .map(|node| {
+            let neighbors = data
+                .edges
+                .iter()
+                .filter_map(|edge| {
+                    if edge.from == node.id {
+                        Some(edge.to.clone())
+                    } else if edge.to == node.id {
+                        Some(edge.from.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (node.id.clone(), neighbors)
+        })
+        .collect()
+}
+
+/// BFS over a precomputed adjacency list — the algorithm the page's JS
+/// transcribes step for step. Must stay membership-equivalent to
+/// [`within_radius`]; tests/render.rs fails if they ever diverge.
+pub fn radius_from_adjacency(
+    adjacency: &BTreeMap<String, Vec<String>>,
+    focus: &str,
+    depth: usize,
+) -> HashSet<String> {
+    let mut seen: HashSet<String> = HashSet::from([focus.to_string()]);
+    let mut queue: VecDeque<(String, usize)> = VecDeque::from([(focus.to_string(), 0)]);
+    while let Some((id, dist)) = queue.pop_front() {
+        if dist == depth {
+            continue;
+        }
+        for neighbor in adjacency.get(&id).map_or(&[][..], Vec::as_slice) {
+            if seen.insert(neighbor.clone()) {
+                queue.push_back((neighbor.clone(), dist + 1));
+            }
+        }
+    }
+    seen
 }
