@@ -43,7 +43,7 @@ async fn tools_list_and_write_read_roundtrip() {
     for expected in [
         "summary", "show", "search", "path", "list", "new_graph", "add_node", "add_nodes",
         "link", "reinforce", "supersede", "set_stage", "park", "unpark", "settle",
-        "reopen", "consolidate", "mermaid", "export",
+        "reopen", "consolidate", "export",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}: {names:?}");
     }
@@ -204,16 +204,15 @@ async fn tools_list_and_write_read_roundtrip() {
     let after = ok_text(r, "summary after partial batch");
     assert!(after.contains("Partial survivor"), "the valid prefix landed: {after}");
 
-    let r = call("mermaid", json!({"graph": "smoke", "focus": "a", "depth": 1})).await.unwrap();
-    assert_ne!(r.is_error, Some(true), "mermaid must succeed");
-    assert!(
-        matches!(&r.structured_content, Some(Value::Object(_)) | None),
-        "mermaid carries object structuredContent (defect #25)"
-    );
-    let chart = outcome_of(&r);
-    let chart = chart["mermaid"].as_str().expect("mermaid string in the object");
-    assert!(chart.starts_with("flowchart TD"), "mermaid header: {chart}");
-    assert!(chart.contains("a[") && chart.contains("First thought"), "focused node drawn: {chart}");
+    let r = call("export", json!({"graph": "smoke", "format": "md", "focus": "a", "depth": 1}))
+        .await
+        .unwrap();
+    assert_ne!(r.is_error, Some(true), "focused md export must succeed");
+    let focused = outcome_of(&r);
+    let focused = focused["export"].as_str().expect("md export string");
+    assert!(focused.contains("```mermaid\nflowchart TD"), "diagram embedded: {focused}");
+    assert!(focused.contains("First thought"), "focused node present: {focused}");
+    assert!(!focused.contains("Partial survivor"), "out-of-radius node excluded: {focused}");
 
     let r = call("export", json!({"graph": "smoke", "format": "json"})).await.unwrap();
     assert_ne!(r.is_error, Some(true), "export json must succeed");

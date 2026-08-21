@@ -53,15 +53,20 @@ pub fn mermaid(data: &GraphData, focus: Option<&str>, depth: usize) -> Result<St
     Ok(out)
 }
 
-/// Readable markdown note: title, status counts, one section per
-/// occupied status (superseded thoughts name their forwarding address),
-/// then the edges as lines of reasoning.
-pub fn export_md(data: &GraphData) -> String {
+/// Readable markdown note: embedded mermaid diagram, status counts,
+/// one section per occupied status (superseded thoughts name their
+/// forwarding address), then the edges as lines of reasoning. `focus`
+/// narrows the diagram, sections, and edges to the radius within
+/// `depth` hops of one thought.
+pub fn export_md(data: &GraphData, focus: Option<&str>, depth: usize) -> Result<String> {
+    let radius = focus.map(|id| within_radius(data, id, depth)).transpose()?;
+    let visible = |id: &str| radius.as_ref().is_none_or(|set| set.contains(id));
+
     let mut out = format!("# {}\n\n", data.meta.title);
-    if let Ok(diagram) = mermaid(data, None, 0) {
-        out.push_str(&format!("```mermaid\n{diagram}```\n\n"));
-    }
-    let count = |status| data.nodes.iter().filter(|n| n.status == status).count();
+    let diagram = mermaid(data, focus, depth)?;
+    out.push_str(&format!("```mermaid\n{diagram}```\n\n"));
+    let count =
+        |status| data.nodes.iter().filter(|n| n.status == status && visible(&n.id)).count();
     out.push_str(&format!(
         "{} active, {} parked, {} superseded\n",
         count(NodeStatus::Active),
@@ -75,7 +80,8 @@ pub fn export_md(data: &GraphData) -> String {
         ("Superseded", NodeStatus::Superseded),
     ];
     for (heading, status) in sections {
-        let members: Vec<&Node> = data.nodes.iter().filter(|n| n.status == status).collect();
+        let members: Vec<&Node> =
+            data.nodes.iter().filter(|n| n.status == status && visible(&n.id)).collect();
         if members.is_empty() {
             continue;
         }
@@ -85,9 +91,14 @@ pub fn export_md(data: &GraphData) -> String {
         }
     }
 
-    if !data.edges.is_empty() {
+    let edges: Vec<_> = data
+        .edges
+        .iter()
+        .filter(|e| visible(&e.from) && visible(&e.to))
+        .collect();
+    if !edges.is_empty() {
         out.push_str("\n## Edges\n\n");
-        for edge in &data.edges {
+        for edge in edges {
             out.push_str(&format!(
                 "- {} -{}-> {}\n",
                 edge.from,
@@ -96,7 +107,7 @@ pub fn export_md(data: &GraphData) -> String {
             ));
         }
     }
-    out
+    Ok(out)
 }
 
 fn bullet(node: &Node) -> String {

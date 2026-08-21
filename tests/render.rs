@@ -159,7 +159,7 @@ fn hostile_titles_are_escaped() {
 
 #[test]
 fn export_md_carries_sections_counts_and_forwarding() {
-    let md = export_md(&fixture());
+    let md = export_md(&fixture(), None, 0).unwrap();
     assert!(md.contains("```mermaid\nflowchart TD"), "markdown embeds the diagram");
     assert!(md.starts_with("# graph g\n"), "title header: {md}");
     assert!(md.contains("3 active, 1 parked, 1 superseded"), "counts line: {md}");
@@ -186,7 +186,7 @@ fn export_md_skips_empty_sections() {
         nodes: vec![node("a", "Alpha", NodeStatus::Active)],
         edges: vec![],
     };
-    let md = export_md(&data);
+    let md = export_md(&data, None, 0).unwrap();
     assert!(md.contains("## Active"));
     assert!(!md.contains("## Parked"), "empty section absent: {md}");
     assert!(!md.contains("## Superseded"), "empty section absent: {md}");

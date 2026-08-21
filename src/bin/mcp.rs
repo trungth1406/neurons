@@ -214,9 +214,12 @@ struct ConsolidateArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-struct MermaidArgs {
+struct ExportArgs {
     graph: String,
-    /// Node id to center the view on; omit for the whole graph
+    /// "md" for a readable note with the mermaid diagram embedded,
+    /// "json" for canonical GraphData
+    format: String,
+    /// Node id to center the view on; omit for the whole graph (md only)
     focus: Option<String>,
     /// Hops from the focus in each direction
     #[serde(default = "two")]
@@ -224,13 +227,6 @@ struct MermaidArgs {
 }
 fn two() -> usize {
     2
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct ExportArgs {
-    graph: String,
-    /// "md" for a readable note, "json" for canonical GraphData
-    format: String,
 }
 
 #[tool_router(server_handler)]
@@ -425,18 +421,6 @@ impl NeuronMcp {
         self.apply(&a.graph, Op::Reopen).await
     }
 
-    #[tool(description = "Mermaid flowchart of a graph: the whole graph, or the radius around one focused thought. Superseded and parked thoughts are styled distinctly; reinforced edges show their weight.")]
-    async fn mermaid(&self, Parameters(a): Parameters<MermaidArgs>) -> ToolResult<Value> {
-        let data = match self.cortex.lock().await.read(&a.graph, unix_now(), |g| g.to_data()) {
-            Ok(d) => d,
-            Err(e) => return fail(e),
-        };
-        match neuron::render::mermaid(&data, a.focus.as_deref(), a.depth) {
-            Ok(chart) => as_value(&json!({ "mermaid": chart })),
-            Err(e) => fail(e),
-        }
-    }
-
     #[tool(description = "Export a graph: format \"md\" renders a readable markdown note, \"json\" returns the canonical GraphData interchange object.")]
     async fn export(&self, Parameters(a): Parameters<ExportArgs>) -> ToolResult<Value> {
         let data = match self.cortex.lock().await.read(&a.graph, unix_now(), |g| g.to_data()) {
@@ -444,7 +428,10 @@ impl NeuronMcp {
             Err(e) => return fail(e),
         };
         match a.format.as_str() {
-            "md" => as_value(&json!({ "export": neuron::render::export_md(&data) })),
+            "md" => match neuron::render::export_md(&data, a.focus.as_deref(), a.depth) {
+                Ok(note) => as_value(&json!({ "export": note })),
+                Err(e) => fail(e),
+            },
             "json" => as_value(&json!({ "export": data })),
             other => Err(format!("unknown format {other:?} (md|json)")),
         }
