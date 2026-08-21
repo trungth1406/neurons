@@ -58,6 +58,9 @@ pub fn mermaid(data: &GraphData, focus: Option<&str>, depth: usize) -> Result<St
 /// then the edges as lines of reasoning.
 pub fn export_md(data: &GraphData) -> String {
     let mut out = format!("# {}\n\n", data.meta.title);
+    if let Ok(diagram) = mermaid(data, None, 0) {
+        out.push_str(&format!("```mermaid\n{diagram}```\n\n"));
+    }
     let count = |status| data.nodes.iter().filter(|n| n.status == status).count();
     out.push_str(&format!(
         "{} active, {} parked, {} superseded\n",

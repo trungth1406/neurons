@@ -160,6 +160,7 @@ fn hostile_titles_are_escaped() {
 #[test]
 fn export_md_carries_sections_counts_and_forwarding() {
     let md = export_md(&fixture());
+    assert!(md.contains("```mermaid\nflowchart TD"), "markdown embeds the diagram");
     assert!(md.starts_with("# graph g\n"), "title header: {md}");
     assert!(md.contains("3 active, 1 parked, 1 superseded"), "counts line: {md}");
     assert!(md.contains("## Active"), "active section: {md}");
