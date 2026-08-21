@@ -43,9 +43,13 @@ async fn tools_list_and_write_read_roundtrip() {
         client.call_tool(params)
     };
 
-    call("new_graph", json!({"graph": "smoke", "title": "Smoke test"}))
+    let created = call("new_graph", json!({"graph": "smoke", "title": "Smoke test"}))
         .await
         .expect("new_graph");
+    assert!(
+        !matches!(created.structured_content, Some(Value::String(_))),
+        "write results must not carry string structuredContent (defect #22)"
+    );
     call(
         "add_node",
         json!({"graph": "smoke", "id": "a", "kind": "idea", "title": "First thought"}),

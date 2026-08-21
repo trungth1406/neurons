@@ -184,10 +184,10 @@ struct ConsolidateArgs {
 
 #[tool_router(server_handler)]
 impl NeuronMcp {
-    async fn apply(&self, graph: &str, op: Op) -> ToolResult<String> {
+    async fn apply(&self, graph: &str, op: Op) -> Result<String, String> {
         match self.cortex.lock().await.apply(graph, op, unix_now()) {
-            Ok(()) => Ok(Json("ok".into())),
-            Err(e) => fail(e),
+            Ok(()) => Ok("ok".into()),
+            Err(e) => Err(format!("{e:#}")),
         }
     }
 
@@ -257,7 +257,7 @@ impl NeuronMcp {
     }
 
     #[tool(description = "Create a new thinking graph. One graph per idea cluster; keep them neuron-sized (~30 nodes), bridge to siblings.")]
-    async fn new_graph(&self, Parameters(a): Parameters<NewGraphArgs>) -> ToolResult<String> {
+    async fn new_graph(&self, Parameters(a): Parameters<NewGraphArgs>) -> Result<String, String> {
         let now = unix_now();
         let meta = GraphMeta {
             id: a.graph,
@@ -268,13 +268,13 @@ impl NeuronMcp {
             updated: now,
         };
         match self.cortex.lock().await.create_graph(&meta) {
-            Ok(()) => Ok(Json("ok".into())),
-            Err(e) => fail(e),
+            Ok(()) => Ok("ok".into()),
+            Err(e) => Err(format!("{e:#}")),
         }
     }
 
     #[tool(description = "Capture a thought into a graph. Id is byte-exact and unique within the graph.")]
-    async fn add_node(&self, Parameters(a): Parameters<AddNodeArgs>) -> ToolResult<String> {
+    async fn add_node(&self, Parameters(a): Parameters<AddNodeArgs>) -> Result<String, String> {
         let node = NewNode {
             id: a.id,
             kind: a.kind,
@@ -287,55 +287,55 @@ impl NeuronMcp {
     }
 
     #[tool(description = "Connect two thoughts with a labeled edge. Repeating the same (from,to,label) reinforces its weight instead of duplicating.")]
-    async fn link(&self, Parameters(a): Parameters<LinkArgs>) -> ToolResult<String> {
+    async fn link(&self, Parameters(a): Parameters<LinkArgs>) -> Result<String, String> {
         self.apply(&a.graph, Op::Link { from: a.from, to: a.to, label: a.label }).await
     }
 
     #[tool(description = "Reinforce a thought: the discussion confirmed it again.")]
-    async fn reinforce(&self, Parameters(a): Parameters<NodeArg>) -> ToolResult<String> {
+    async fn reinforce(&self, Parameters(a): Parameters<NodeArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Reinforce { id: a.id }).await
     }
 
     #[tool(description = "Correct a belief: marks it superseded pointing at its replacement. Never deletes; consolidates immediately.")]
-    async fn supersede(&self, Parameters(a): Parameters<SupersedeArgs>) -> ToolResult<String> {
+    async fn supersede(&self, Parameters(a): Parameters<SupersedeArgs>) -> Result<String, String> {
         self.apply(&a.graph, Op::Supersede { old: a.old, by: a.by }).await
     }
 
     #[tool(description = "Record where a thought stands in the working flow (free-form stage).")]
-    async fn set_stage(&self, Parameters(a): Parameters<StageArgs>) -> ToolResult<String> {
+    async fn set_stage(&self, Parameters(a): Parameters<StageArgs>) -> Result<String, String> {
         self.apply(&a.graph, Op::SetStage { id: a.id, stage: a.stage }).await
     }
 
     #[tool(description = "Set a thought aside: not now, not wrong. It leaves the overview but keeps its connections.")]
-    async fn park(&self, Parameters(a): Parameters<NodeArg>) -> ToolResult<String> {
+    async fn park(&self, Parameters(a): Parameters<NodeArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Park { id: a.id }).await
     }
 
     #[tool(description = "Wake a parked thought back into the active graph.")]
-    async fn unpark(&self, Parameters(a): Parameters<NodeArg>) -> ToolResult<String> {
+    async fn unpark(&self, Parameters(a): Parameters<NodeArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Unpark { id: a.id }).await
     }
 
     #[tool(description = "The thinking settles: mark the whole graph settled. Consolidates immediately.")]
-    async fn settle(&self, Parameters(a): Parameters<GraphArg>) -> ToolResult<String> {
+    async fn settle(&self, Parameters(a): Parameters<GraphArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Settle).await
     }
 
     #[tool(description = "Wake a settled graph back to active.")]
-    async fn reopen(&self, Parameters(a): Parameters<GraphArg>) -> ToolResult<String> {
+    async fn reopen(&self, Parameters(a): Parameters<GraphArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Reopen).await
     }
 
     #[tool(description = "Consolidate to long-term storage now: one graph, or everything dirty.")]
-    async fn consolidate(&self, Parameters(a): Parameters<ConsolidateArgs>) -> ToolResult<String> {
+    async fn consolidate(&self, Parameters(a): Parameters<ConsolidateArgs>) -> Result<String, String> {
         let result = self
             .cortex
             .lock()
             .await
             .consolidate(a.graph.as_deref(), unix_now());
         match result {
-            Ok(()) => Ok(Json("ok".into())),
-            Err(e) => fail(e),
+            Ok(()) => Ok("ok".into()),
+            Err(e) => Err(format!("{e:#}")),
         }
     }
 }
