@@ -224,7 +224,7 @@ impl NeuronMcp {
     #[tool(description = "Full-text search across all graphs (consolidated) plus the focused hot graph.")]
     async fn search(&self, Parameters(a): Parameters<SearchArgs>) -> ToolResult<Value> {
         match self.cortex.lock().await.search(&a.query, a.limit) {
-            Ok(hits) => as_value(&hits),
+            Ok(hits) => as_value(&json!({ "hits": hits })),
             Err(e) => fail(e),
         }
     }
@@ -251,7 +251,7 @@ impl NeuronMcp {
             Some(other) => return Err(format!("unknown status {other:?} (active|settled)")),
         };
         match self.cortex.lock().await.list(status, a.project.as_deref()) {
-            Ok(metas) => as_value(&metas),
+            Ok(metas) => as_value(&json!({ "graphs": metas })),
             Err(e) => fail(e),
         }
     }

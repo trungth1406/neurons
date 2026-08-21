@@ -121,6 +121,10 @@ async fn tools_list_and_write_read_roundtrip() {
     assert!(hits.contains("smoke"), "consolidated thoughts findable: {hits}");
 
     let r = call("list", json!({"status": "active"})).await.unwrap();
+    assert!(
+        matches!(&r.structured_content, Some(Value::Object(_)) | None),
+        "read results must carry object structuredContent (defect #25)"
+    );
     let listed = ok_text(r, "list");
     assert!(listed.contains("Smoke test"), "list sees the graph: {listed}");
     let r = call("list", json!({"status": "bogus"})).await;
