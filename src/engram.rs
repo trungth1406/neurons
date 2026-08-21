@@ -66,6 +66,11 @@ impl EngramStore {
 
     /// The one whole-graph write: a graph arriving from interchange.
     pub fn import(&mut self, data: &GraphData) -> Result<()> {
+        // The memory must not adopt what the mind cannot rebuild (#14):
+        // a snapshot is valid only if a NeuronGraph can be recollected
+        // from it. Refuse at the door, before anything is written.
+        crate::graph::NeuronGraph::from_data(data.clone())
+            .with_context(|| format!("snapshot {:?} is not self-consistent", data.meta.id))?;
         let tx = self.write_tx()?;
         let taken: Option<i64> = tx
             .query_row("SELECT 1 FROM graphs WHERE id = ?1", [&data.meta.id], |r| r.get(0))
