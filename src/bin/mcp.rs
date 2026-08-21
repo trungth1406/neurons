@@ -155,6 +155,37 @@ struct LinkArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct NodeSpec {
+    /// Node id, unique within the graph (byte-exact identity)
+    id: String,
+    /// Free-form kind: idea, question, decision, knowledge, correction...
+    kind: String,
+    title: String,
+    #[serde(default)]
+    content: String,
+    stage: Option<String>,
+    #[serde(default)]
+    skills: Vec<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LinkSpec {
+    from: String,
+    to: String,
+    /// Free-form label; repeating the same triple reinforces its weight
+    label: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct AddNodesArgs {
+    graph: String,
+    /// Applied in order, before any links
+    nodes: Vec<NodeSpec>,
+    #[serde(default)]
+    links: Vec<LinkSpec>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct NodeArg {
     graph: String,
     id: String,
@@ -289,6 +320,54 @@ impl NeuronMcp {
     #[tool(description = "Connect two thoughts with a labeled edge. Repeating the same (from,to,label) reinforces its weight instead of duplicating.")]
     async fn link(&self, Parameters(a): Parameters<LinkArgs>) -> Result<String, String> {
         self.apply(&a.graph, Op::Link { from: a.from, to: a.to, label: a.label }).await
+    }
+
+    #[tool(description = "Batch capture: apply nodes then links in order through the Op door. Stops at the first refusal, reporting what was applied and what failed.")]
+    async fn add_nodes(&self, Parameters(a): Parameters<AddNodesArgs>) -> ToolResult<Value> {
+        let now = unix_now();
+        let mut cortex = self.cortex.lock().await;
+        let mut applied_nodes = 0;
+        let mut applied_links = 0;
+        let mut failed = None;
+        for n in a.nodes {
+            let id = n.id.clone();
+            let node = NewNode {
+                id: n.id,
+                kind: n.kind,
+                title: n.title,
+                content: n.content,
+                stage: n.stage,
+                skills: n.skills,
+            };
+            match cortex.apply(&a.graph, Op::AddNode(node), now) {
+                Ok(()) => applied_nodes += 1,
+                Err(e) => {
+                    failed = Some(json!({"kind": "node", "id": id, "error": format!("{e:#}")}));
+                    break;
+                }
+            }
+        }
+        if failed.is_none() {
+            for l in a.links {
+                let op = Op::Link { from: l.from.clone(), to: l.to.clone(), label: l.label.clone() };
+                match cortex.apply(&a.graph, op, now) {
+                    Ok(()) => applied_links += 1,
+                    Err(e) => {
+                        failed = Some(json!({
+                            "kind": "link",
+                            "edge": {"from": l.from, "to": l.to, "label": l.label},
+                            "error": format!("{e:#}"),
+                        }));
+                        break;
+                    }
+                }
+            }
+        }
+        as_value(&json!({
+            "applied_nodes": applied_nodes,
+            "applied_links": applied_links,
+            "failed": failed,
+        }))
     }
 
     #[tool(description = "Reinforce a thought: the discussion confirmed it again.")]
