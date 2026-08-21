@@ -217,9 +217,11 @@ struct ConsolidateArgs {
 struct ExportArgs {
     graph: String,
     /// "md" for a readable note with the mermaid diagram embedded,
-    /// "json" for canonical GraphData
+    /// "json" for canonical GraphData, "html" for a self-contained
+    /// interactive page
     format: String,
-    /// Node id to center the view on; omit for the whole graph (md only)
+    /// Node id to center the view on; omit for the whole graph (md and
+    /// html; html re-scopes client-side from this initial view)
     focus: Option<String>,
     /// Hops from the focus in each direction
     #[serde(default = "two")]
@@ -421,7 +423,7 @@ impl NeuronMcp {
         self.apply(&a.graph, Op::Reopen).await
     }
 
-    #[tool(description = "Export a graph: format \"md\" renders a readable markdown note, \"json\" returns the canonical GraphData interchange object.")]
+    #[tool(description = "Export a graph: format \"md\" renders a readable markdown note, \"json\" returns the canonical GraphData interchange object, \"html\" renders a self-contained interactive page (offline force-directed view with in-page focus and depth controls).")]
     async fn export(&self, Parameters(a): Parameters<ExportArgs>) -> ToolResult<Value> {
         let data = match self.cortex.lock().await.read(&a.graph, unix_now(), |g| g.to_data()) {
             Ok(d) => d,
@@ -433,7 +435,11 @@ impl NeuronMcp {
                 Err(e) => fail(e),
             },
             "json" => as_value(&json!({ "export": data })),
-            other => Err(format!("unknown format {other:?} (md|json)")),
+            "html" => match neuron::render::export_html(&data, a.focus.as_deref(), a.depth) {
+                Ok(page) => as_value(&json!({ "export": page })),
+                Err(e) => fail(e),
+            },
+            other => Err(format!("unknown format {other:?} (md|json|html)")),
         }
     }
 

@@ -230,6 +230,13 @@ async fn tools_list_and_write_read_roundtrip() {
     let note = exported["export"].as_str().expect("md export is a string in the object");
     assert!(note.contains("# Smoke test"), "note carries the title: {note}");
 
+    let r = call("export", json!({"graph": "smoke", "format": "html"})).await.unwrap();
+    assert_ne!(r.is_error, Some(true), "html export must succeed");
+    let html_out = outcome_of(&r);
+    let page = html_out["export"].as_str().expect("html export is a string");
+    assert!(page.contains("<title>") && page.contains("Smoke test"), "html carries the title: {}", &page[..200]);
+    assert!(page.contains("forceSimulation"), "html embeds d3-force");
+
     let r = call("export", json!({"graph": "smoke", "format": "yaml"})).await;
     if let Ok(result) = r {
         assert_eq!(result.is_error, Some(true), "bogus export format is a tool error");

@@ -192,3 +192,174 @@ fn export_md_skips_empty_sections() {
     assert!(!md.contains("## Superseded"), "empty section absent: {md}");
     assert!(!md.contains("## Edges"), "edgeless graph has no edges section: {md}");
 }
+
+// ---------------------------------------------------------------------
+// Interactive HTML export: one document, one radius authority.
+// ---------------------------------------------------------------------
+
+use neuron::export_html;
+use neuron::render::{adjacency, radius_from_adjacency, within_radius};
+use serde_json::json;
+
+/// a -> b -> c -> a cycle with a c -> d -> e tail hanging off it.
+fn cycle_fixture() -> GraphData {
+    GraphData {
+        meta: meta("cyc"),
+        nodes: vec![
+            node("a", "A", NodeStatus::Active),
+            node("b", "B", NodeStatus::Active),
+            node("c", "C", NodeStatus::Active),
+            node("d", "D", NodeStatus::Active),
+            node("e", "E", NodeStatus::Active),
+        ],
+        edges: vec![
+            edge("a", "b", "next", 1),
+            edge("b", "c", "next", 1),
+            edge("c", "a", "closes", 1),
+            edge("c", "d", "tail", 1),
+            edge("d", "e", "tail", 1),
+        ],
+    }
+}
+
+/// Parallel edges both ways, a self-loop, a disconnected pair, and an
+/// isolated node — the adversarial shapes for radius membership.
+fn tangle_fixture() -> GraphData {
+    GraphData {
+        meta: meta("tan"),
+        nodes: vec![
+            node("a", "A", NodeStatus::Active),
+            node("b", "B", NodeStatus::Active),
+            node("c", "C", NodeStatus::Active),
+            node("x", "X", NodeStatus::Active),
+            node("y", "Y", NodeStatus::Active),
+            node("z", "Z", NodeStatus::Active),
+        ],
+        edges: vec![
+            edge("a", "b", "raised", 1),
+            edge("a", "b", "again", 2),
+            edge("b", "a", "returns", 1),
+            edge("b", "b", "loops", 1),
+            edge("b", "c", "onward", 1),
+            edge("x", "y", "apart", 1),
+        ],
+    }
+}
+
+/// The equivalence proof behind the page's client-side scoping: the
+/// embedded adjacency + transcribed BFS must compute exactly the
+/// membership within_radius (the one authority) computes, for every
+/// focus and every slider depth, over cycles, parallel edges,
+/// self-loops, and disconnected parts.
+#[test]
+fn page_radius_algorithm_matches_within_radius_everywhere() {
+    for data in [fixture(), cycle_fixture(), tangle_fixture()] {
+        let adj = adjacency(&data);
+        for focus in data.nodes.iter().map(|n| n.id.as_str()) {
+            for depth in 0..=6 {
+                let engine = within_radius(&data, focus, depth).unwrap();
+                let page = radius_from_adjacency(&adj, focus, depth);
+                assert_eq!(
+                    engine, page,
+                    "graph {:?} focus {focus:?} depth {depth} diverged",
+                    data.meta.id
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn adjacency_covers_every_node_exactly() {
+    let data = tangle_fixture();
+    let adj = adjacency(&data);
+    let ids: Vec<&str> = data.nodes.iter().map(|n| n.id.as_str()).collect();
+    let keys: Vec<&str> = adj.keys().map(String::as_str).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "every node keyed, none invented");
+    assert_eq!(adj["z"], Vec::<String>::new(), "isolated node has no neighbors");
+    assert_eq!(
+        adj["a"],
+        vec!["b".to_string(), "b".into(), "b".into()],
+        "parallel and reverse edges keep their duplicate entries in scan order"
+    );
+}
+
+fn embedded_payload(html: &str) -> serde_json::Value {
+    let marker = "<script id=\"neuron-payload\" type=\"application/json\">";
+    let start = html.find(marker).expect("payload script present") + marker.len();
+    let end = html[start..].find("</script>").expect("payload closes") + start;
+    serde_json::from_str(&html[start..end]).expect("payload is valid JSON")
+}
+
+#[test]
+fn export_html_is_one_self_contained_document() {
+    let html = export_html(&fixture(), None, 0).unwrap();
+    assert!(html.starts_with("<!doctype html>"), "document header: {}", &html[..40]);
+    assert!(html.contains("<title>graph g</title>"), "titled after the graph");
+    assert!(html.contains("forceSimulation"), "vendored d3-force inlined");
+    assert!(html.contains("d3-force@3.0.0"), "vendor provenance named");
+    assert!(html.contains("@media (prefers-color-scheme: dark)"), "dark theme designed");
+    assert!(html.contains("@media (prefers-color-scheme: light)"), "light theme designed");
+    assert!(!html.contains("@@NEURON:"), "no unfilled template markers");
+    assert!(
+        html.contains("render::radius_from_adjacency"),
+        "page JS names the algorithm it transcribes"
+    );
+}
+
+#[test]
+fn export_html_embeds_canonical_data_and_initial_scope() {
+    let html = export_html(&fixture(), Some("b"), 1).unwrap();
+    let payload = embedded_payload(&html);
+    assert_eq!(payload["data"]["meta"]["id"], json!("g"));
+    assert_eq!(
+        payload["data"]["nodes"].as_array().unwrap().len(),
+        5,
+        "the whole graph ships even when focused: rescoping is client-side"
+    );
+    assert_eq!(payload["initial"]["focus"], json!("b"));
+    assert_eq!(payload["initial"]["depth"], json!(1));
+    assert_eq!(payload["adjacency"]["a"], json!(["b"]));
+    assert_eq!(payload["adjacency"]["e"], json!([]), "disconnected node embedded too");
+}
+
+#[test]
+fn export_html_refuses_unknown_focus() {
+    let err = export_html(&fixture(), Some("ghost"), 2).unwrap_err();
+    assert!(err.to_string().contains("ghost"), "refusal names the id: {err}");
+}
+
+#[test]
+fn export_html_keeps_status_and_weight_parity_with_mermaid() {
+    let html = export_html(&fixture(), None, 0).unwrap();
+    assert!(html.contains(".node.superseded circle.body"), "superseded class styled");
+    assert!(html.contains(".node.parked circle.body"), "parked class styled");
+    assert!(html.contains("stroke-dasharray: 5 5"), "superseded dashes match mermaid");
+    assert!(html.contains("stroke-dasharray: 2 3"), "parked dashes match mermaid");
+    assert!(html.contains("' x' + weight"), "edge labels carry weight x-counts");
+}
+
+#[test]
+fn hostile_titles_cannot_break_out_of_the_page() {
+    let mut data = fixture();
+    data.meta.title = "sneaky </script><script>alert(1)".into();
+    data.nodes[0].title = "also </script> here".into();
+    let html = export_html(&data, None, 0).unwrap();
+    assert!(
+        !html.contains("</script><script>alert"),
+        "no raw script breakout anywhere in the page"
+    );
+    assert!(
+        html.contains("<title>sneaky &lt;/script&gt;&lt;script&gt;alert(1)</title>"),
+        "head title is entity-escaped"
+    );
+    let payload = embedded_payload(&html);
+    assert_eq!(
+        payload["data"]["meta"]["title"],
+        json!("sneaky </script><script>alert(1)"),
+        "the title round-trips intact through the escaped payload"
+    );
+    assert_eq!(payload["data"]["nodes"][0]["title"], json!("also </script> here"));
+}
