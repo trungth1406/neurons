@@ -67,13 +67,12 @@ async fn tools_list_and_write_read_roundtrip() {
     assert!(text.contains("First thought"), "summary carries the thought: {text}");
 
     let missing = call("reinforce", json!({"graph": "smoke", "id": "ghost"})).await;
-    match missing {
-        Ok(result) => assert_eq!(
+    if let Ok(result) = missing {
+        assert_eq!(
             result.is_error,
             Some(true),
             "ghost reinforce must surface as a tool error"
-        ),
-        Err(_) => {}
+        );
     }
 
     client.cancel().await.ok();
