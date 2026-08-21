@@ -15,7 +15,7 @@ use neuron::{ConsolidationPolicy, Cortex, GraphMeta, GraphStatus, NewNode, Op};
 use serde_json::{json, Value};
 
 #[derive(Parser)]
-#[command(name = "neuron-mcp", about = "Thinking-graph MCP server (the owner)")]
+#[command(name = "neuron-mcp", version, about = "Thinking-graph MCP server (the owner)")]
 struct Args {
     /// Database path
     #[arg(long, env = "NEURON_DB")]

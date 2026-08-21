@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+      - name: version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          test "$TAG" = "$CARGO" || { echo "tag $TAG != Cargo.toml $CARGO"; exit 1; }
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --release --bin neuron-mcp
+      - name: package
+        run: |
+          BIN=target/release/neuron-mcp
+          $BIN --version
+          tar -C target/release -czf neuron-mcp-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz neuron-mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neuron-mcp-${{ matrix.target }}
+          path: neuron-mcp-*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" neuron-mcp-*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "neurons $GITHUB_REF_NAME" \
+            --generate-notes
