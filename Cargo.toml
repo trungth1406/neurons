@@ -5,19 +5,28 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive", "env"] }
 libc = "0.2.189"
 # serde-1 is owner-pinned (spec #1); rejected for persistence per ADR-0001
 petgraph = { version = "0.8.3", features = ["stable_graph", "serde-1"] }
 refinery = { version = "0.9.2", features = ["rusqlite"] }
+rmcp = { version = "3.1.4", features = ["server", "transport-io"] }
 # 0.39 cap comes from refinery 0.9 (ADR-0005)
 rusqlite = { version = "0.39", features = ["bundled"] }
+schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 
 [[bin]]
 name = "neuron"
 path = "src/main.rs"
 
 [dev-dependencies]
+rmcp = { version = "3.1.4", features = ["client", "transport-child-process"] }
 serde_json = "1.0.151"
 tempfile = "3.27.0"
+
+[[bin]]
+name = "neuron-mcp"
+path = "src/bin/mcp.rs"
