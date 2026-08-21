@@ -5,3 +5,4 @@ target/
 !docs/
 !*.md
 !CLAUDE.md
+!src/bin/
