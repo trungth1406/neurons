@@ -213,6 +213,22 @@ struct ConsolidateArgs {
     graph: Option<String>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct ExportArgs {
+    graph: String,
+    /// "md" for a readable note with the mermaid diagram embedded,
+    /// "json" for canonical GraphData
+    format: String,
+    /// Node id to center the view on; omit for the whole graph (md only)
+    focus: Option<String>,
+    /// Hops from the focus in each direction
+    #[serde(default = "two")]
+    depth: usize,
+}
+fn two() -> usize {
+    2
+}
+
 #[tool_router(server_handler)]
 impl NeuronMcp {
     async fn apply(&self, graph: &str, op: Op) -> Result<String, String> {
@@ -403,6 +419,22 @@ impl NeuronMcp {
     #[tool(description = "Wake a settled graph back to active.")]
     async fn reopen(&self, Parameters(a): Parameters<GraphArg>) -> Result<String, String> {
         self.apply(&a.graph, Op::Reopen).await
+    }
+
+    #[tool(description = "Export a graph: format \"md\" renders a readable markdown note, \"json\" returns the canonical GraphData interchange object.")]
+    async fn export(&self, Parameters(a): Parameters<ExportArgs>) -> ToolResult<Value> {
+        let data = match self.cortex.lock().await.read(&a.graph, unix_now(), |g| g.to_data()) {
+            Ok(d) => d,
+            Err(e) => return fail(e),
+        };
+        match a.format.as_str() {
+            "md" => match neuron::render::export_md(&data, a.focus.as_deref(), a.depth) {
+                Ok(note) => as_value(&json!({ "export": note })),
+                Err(e) => fail(e),
+            },
+            "json" => as_value(&json!({ "export": data })),
+            other => Err(format!("unknown format {other:?} (md|json)")),
+        }
     }
 
     #[tool(description = "Consolidate to long-term storage now: one graph, or everything dirty.")]
