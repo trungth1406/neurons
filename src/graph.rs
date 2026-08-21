@@ -19,6 +19,8 @@ pub enum Op {
     Reinforce { id: String },
     Supersede { old: String, by: String },
     SetStage { id: String, stage: String },
+    Park { id: String },
+    Unpark { id: String },
     Settle,
     Reopen,
 }
@@ -37,7 +39,7 @@ impl Op {
         match self {
             Op::Supersede { .. } | Op::Settle | Op::Reopen => OpKind::Lifecycle,
             Op::AddNode(_) | Op::Link { .. } | Op::Reinforce { .. }
-            | Op::SetStage { .. } => OpKind::Mutation,
+            | Op::SetStage { .. } | Op::Park { .. } | Op::Unpark { .. } => OpKind::Mutation,
         }
     }
 }
@@ -156,6 +158,8 @@ impl NeuronGraph {
             Op::Reinforce { id } => self.reinforce(&id, now),
             Op::Supersede { old, by } => self.supersede(&old, &by, now),
             Op::SetStage { id, stage } => self.set_stage(&id, &stage, now),
+            Op::Park { id } => self.park(&id, now),
+            Op::Unpark { id } => self.unpark(&id, now),
             Op::Settle => {
                 self.settle(now);
                 Ok(())
@@ -234,6 +238,33 @@ impl NeuronGraph {
         node.superseded_by = Some(by.to_string());
         node.updated = now;
         self.journal_node(old_idx, now);
+        Ok(())
+    }
+
+    /// Set a thought aside: not now, not wrong. Only active thoughts can
+    /// be parked; a corrected belief is already resolved.
+    pub fn park(&mut self, id: &str, now: i64) -> Result<()> {
+        let idx = self.require(id)?;
+        let node = &mut self.nodes[idx.0 as usize];
+        if node.status != NodeStatus::Active {
+            bail!("only an active thought can be parked; {id:?} is {:?}", node.status);
+        }
+        node.status = NodeStatus::Parked;
+        node.updated = now;
+        self.journal_node(idx, now);
+        Ok(())
+    }
+
+    /// Wake a parked thought back into the active graph.
+    pub fn unpark(&mut self, id: &str, now: i64) -> Result<()> {
+        let idx = self.require(id)?;
+        let node = &mut self.nodes[idx.0 as usize];
+        if node.status != NodeStatus::Parked {
+            bail!("only a parked thought can be unparked; {id:?} is {:?}", node.status);
+        }
+        node.status = NodeStatus::Active;
+        node.updated = now;
+        self.journal_node(idx, now);
         Ok(())
     }
 

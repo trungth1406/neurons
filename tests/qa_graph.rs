@@ -467,8 +467,24 @@ fn qa_16_marking_where_a_thought_stands() {
 // Op::Park/Unpark land, this scenario asserts: parking is a Mutation, parked
 // thoughts leave frontier and top, counts.parked tracks them, unparking
 // restores them.
+// Fulfilled by ticket #13: a thought set aside is not wrong, not gone -
+// it leaves the overview, keeps its connections, and wakes on demand.
 #[test]
-#[ignore = "pending Op::Park/Unpark - ticket #13"]
 fn qa_41_a_parked_thought_rests_outside_the_overview() {
-    unimplemented!("ticket #13: Op::Park/Unpark not merged yet");
+    let mut mind = fresh_mind("m");
+    capture(&mut mind, "later-maybe", 10);
+    capture(&mut mind, "now", 11);
+    mind.link("later-maybe", "now", "relates", 12).unwrap();
+
+    mind.apply(Op::Park { id: "later-maybe".into() }, 20).unwrap();
+    let overview = mind.summary(5);
+    assert_eq!(overview.counts.parked, 1);
+    assert!(
+        !overview.frontier.iter().any(|b| b.id == "later-maybe"),
+        "a parked thought rests outside the overview"
+    );
+    assert_eq!(mind.edges().len(), 1, "its connections survive the rest");
+
+    mind.apply(Op::Unpark { id: "later-maybe".into() }, 30).unwrap();
+    assert_eq!(mind.summary(5).counts.parked, 0, "and it wakes on demand");
 }
