@@ -36,7 +36,14 @@ struct Args {
 
 fn default_db() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join(".claude/neurons/neurons.db")
+    let base = home.join(".claude/neurons");
+    let cwd = std::env::current_dir().ok();
+    let project = cwd
+        .as_deref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("default");
+    base.join(project).join("neurons.db")
 }
 
 fn unix_now() -> i64 {
