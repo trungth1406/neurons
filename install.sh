@@ -23,13 +23,13 @@ if [ "$CURRENT" = "$TAG" ]; then
 else
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
-  echo "downloading neuron-mcp $TAG ($TARGET)..."
+  echo "downloading neuron-mcp ${TAG} for ${TARGET}..."
   curl -fsSL -o "$TMP/neuron-mcp.tar.gz" "$DOWNLOAD_URL"
   tar -xzf "$TMP/neuron-mcp.tar.gz" -C "$TMP"
   mkdir -p "$BIN_DIR"
   mv -f "$TMP/neuron-mcp" "$BIN_DIR/neuron-mcp"
   chmod +x "$BIN_DIR/neuron-mcp"
-  echo "installed: $("$BIN_DIR/neuron-mcp" --version) ($CURRENT -> $TAG)"
+  echo "installed neuron-mcp ${TAG} ($CURRENT -> $TAG)"
 fi
 
 if command -v claude >/dev/null 2>&1; then
