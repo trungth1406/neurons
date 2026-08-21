@@ -34,6 +34,13 @@ tests/          seam tests per module (see Test plan)
 docs/           this file + adr/
 ```
 
+## Identity contract (owner ruling, QA-1 AMB-08)
+
+Node ids, graph ids, and edge keys are opaque BYTE-EXACT strings. The
+engine never case-folds and never unicode-normalizes: "Idea" and
+"idea" are two thoughts; composed and decomposed forms of the same
+glyph are two ids. Search may fold for matching; identity never does.
+
 ## types.rs
 
 ```rust
@@ -109,7 +116,9 @@ Invariants (hold after every public call):
 - `ids` maps exactly the node ids present in `nodes`.
 - `topo` node/edge sets mirror `nodes`/`edges` (edge weight lives in
   the flat vec; topo carries connectivity only).
-- Every mutation records into the outbox and stamps `last_touch` and
+- Every mutation records into the outbox — including the graphs row:
+  meta rides every trace, so consolidated `updated` never drifts from
+  the hot mind (QA-39 pins this as contract) — and stamps `last_touch` and
   `meta.updated`; a successful consolidate drains the outbox via `take_trace` (cortex-driven
   after a successful consolidate).
 
