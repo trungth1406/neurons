@@ -374,10 +374,9 @@ fn qa_26_two_ids_differing_only_in_case_are_two_thoughts_everywhere() {
 // Contract violated: ADR-0004 ("recall brings an engram back"), DESIGN
 // Principles 1 (storage is a snapshot sink for what the mind holds), DESIGN
 // test plan (lossless roundtrip). Expected: import refuses what from_data
-// refuses. Observed: import accepts it. Filed as a defect issue.
+// refuses. Fixed under #14: import validates via from_data at the door.
 #[test]
-#[ignore = "DEFECT(QA-15): import accepts a dangling-edge snapshot that recall/from_data cannot rebuild - see gh issue"]
-fn qa_15_defect_the_memory_must_refuse_a_snapshot_the_mind_cannot_rethink() {
+fn qa_15_the_memory_refuses_a_snapshot_the_mind_cannot_rethink() {
     let home = a_quiet_place();
     let mut store = long_term_memory(&home);
     let corpse = GraphData {
