@@ -9,30 +9,18 @@ long-term storage (SQLite, machine-local).
 
 ## Install
 
-Prebuilt binary from a release (needs gh auth while the repo is private):
+One line (needs `gh` auth while the repo is private):
 
-    gh release download v1.0.0 -R trungth1406/neurons -p '*aarch64-apple-darwin*'
-    tar xzf neuron-mcp-*.tar.gz && mv neuron-mcp ~/.cargo/bin/
+    curl -fsSL https://raw.githubusercontent.com/trungth1406/neurons/main/install.sh | bash
 
 Or build from source (Rust toolchain required):
 
     cargo install --git https://github.com/trungth1406/neurons --locked
 
-Updating is the same command again. The database self-migrates on the
-next open; an older binary refuses a newer database rather than corrupt it.
-
-## Register with Claude Code
-
-    claude mcp add neurons -- ~/.cargo/bin/neuron-mcp
-
-That is the entire deployment. First run creates ~/.claude/neurons/ and
-the database with full schema; nothing else to set up.
-
-## Tools
-
-Reads: summary, show, search, path, list — all budget-capped.
-Writes: new_graph, add_node, link, reinforce, supersede, set_stage,
-park, unpark, settle, reopen, consolidate.
+Both install `neuron-mcp` to `~/.cargo/bin/` and register it with Claude Code.
+Updating is the same command again. The database self-creates on first use
+and self-migrates on upgrade; an older binary refuses a newer database
+rather than corrupt it.
 
 ## Configuration
 
@@ -40,7 +28,7 @@ All optional; defaults in parentheses.
 
 | flag | env | meaning |
 |---|---|---|
-| --db | NEURON_DB | database path (~/.claude/neurons/neurons.db) |
+| --db | NEURON_DB | database path (~/.claude/neurons/<project>/neurons.db) |
 | --tick-secs | NEURON_TICK_SECS | sweeper interval (15) |
 | --dirty-threshold | NEURON_DIRTY_THRESHOLD | ops before consolidation (10) |
 | --quiet-secs | NEURON_QUIET_SECS | idle seconds before sweep consolidates (60) |
