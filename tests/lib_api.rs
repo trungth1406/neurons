@@ -221,3 +221,38 @@ fn trace_rows_follow_insertion_order() {
     let order: Vec<&str> = t.nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(order, ["a", "b", "c"], "deterministic: insertion order, not touch order");
 }
+
+#[test]
+fn park_sets_aside_and_unpark_wakes() {
+    let mut g = seeded();
+    g.park("c", 300).unwrap();
+    let c = g.nodes().iter().find(|n| n.id == "c").unwrap();
+    assert_eq!(c.status, NodeStatus::Parked);
+    let s = g.summary(5);
+    assert_eq!((s.counts.active, s.counts.parked), (2, 1));
+    assert!(!s.frontier.iter().any(|b| b.id == "c"), "parked rests outside the overview");
+    g.unpark("c", 310).unwrap();
+    assert_eq!(g.summary(5).counts.parked, 0);
+}
+
+#[test]
+fn park_refuses_the_wrong_states() {
+    let mut g = seeded();
+    assert!(g.park("ghost", 300).is_err());
+    g.supersede("a", "b", 300).unwrap();
+    assert!(g.park("a", 310).is_err(), "corrected beliefs are resolved, not parkable");
+    assert!(g.unpark("b", 310).is_err(), "active thought is not parked");
+    g.park("b", 320).unwrap();
+    assert!(g.park("b", 330).is_err(), "double park refused");
+}
+
+#[test]
+fn park_travels_the_apply_door_and_roundtrips() {
+    let mut g = seeded();
+    g.apply(neuron::Op::Park { id: "c".into() }, 300).unwrap();
+    let data = g.to_data();
+    let back = NeuronGraph::from_data(data.clone()).unwrap();
+    assert_eq!(back.to_data(), data);
+    let c = back.nodes().iter().find(|n| n.id == "c").unwrap();
+    assert_eq!(c.status, NodeStatus::Parked);
+}
